@@ -65,8 +65,40 @@ async function cacheFirst(req, name) {
   return res;
 }
 
+/**
+ * Re-wrap a cached response so the page can tell it did not come from the
+ * network.
+ *
+ * Without this the app cannot distinguish "fresh list" from "yesterday's list
+ * replayed", because both arrive as a perfectly ordinary 200. The home page
+ * needs that difference: it must warn that only downloaded episodes are
+ * playable instead of looking like nothing is wrong.
+ *
+ * Same-origin, so there is no CORS exposure: pages on another origin never see
+ * this response.
+ */
+async function marked(hit) {
+  const headers = new Headers(hit.headers);
+  headers.set("X-Nv-Stale", "1");
+  // `arrayBuffer()` hands back a decoded body, so the upstream's encoding and
+  // length no longer describe it. Leaving them in would have the browser try to
+  // decompress plain bytes (or truncate them), which is a far worse failure than
+  // the staleness marker is worth.
+  headers.delete("Content-Encoding");
+  headers.delete("Content-Length");
+  return new Response(await hit.arrayBuffer(), {
+    status: hit.status,
+    statusText: hit.statusText,
+    headers,
+  });
+}
+
 async function networkFirst(req, name, key) {
   const cache = await caches.open(name);
+  const fromCache = async () => {
+    const hit = (await cache.match(key ?? req)) || (key ? await cache.match(req) : null);
+    return hit ? marked(hit) : null;
+  };
   try {
     const res = await fetch(req);
     // A 5xx is a *successful fetch* that failed upstream, so it never reaches
@@ -76,15 +108,13 @@ async function networkFirst(req, name, key) {
     // "Đang tải…" forever even with the episode sitting in `nv-offline-v1`.
     // Treat it like a network failure: last good copy wins.
     if (res.status >= 500) {
-      const hit = (await cache.match(key ?? req)) || (key ? await cache.match(req) : null);
-      if (hit) return hit;
-      return res;
+      return (await fromCache()) || res;
     }
     if (storable(res)) cache.put(key ?? req, res.clone());
     return res;
   } catch (err) {
     // Offline: fall back to the last good copy instead of failing the page.
-    const hit = (await cache.match(key ?? req)) || (key ? await cache.match(req) : null);
+    const hit = await fromCache();
     if (hit) return hit;
     throw err;
   }

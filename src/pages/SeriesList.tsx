@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { api } from "../api/client";
+import { api, apiIsStale } from "../api/client";
 import { packThumb, readPackApi, removeDownload } from "../lib/download";
 import { fmtBytes } from "../lib/utils";
 import { useDownloads } from "../stores";
@@ -16,11 +16,18 @@ type Tab = "all" | "offline";
  * The "Đã tải" tab renders entirely from `useDownloads` — there is no endpoint
  * that lists episodes across series, and more to the point this tab has to work
  * with the backend switched off, which is the whole feature.
+ *
+ * The "Tất cả" tab can also render with nothing but cached data. It looks
+ * identical to a live one, so it carries a caveat (see `stale` below) rather
+ * than letting the user believe every episode is watchable.
  */
 export default function SeriesList() {
   const [series, setSeries] = useState<SeriesSummary[] | null>(null);
   const [error, setError] = useState("");
   const [tab, setTab] = useState<Tab>("all");
+  /** The list came from cache — the catalogue may be out of date and most
+   * episodes will not play. Set from the response header, not guessed. */
+  const [stale, setStale] = useState(false);
 
   const entries = useDownloads((s) => s.entries);
   const downloads = Object.values(entries).sort((a, b) => b.updatedAt - a.updatedAt);
@@ -28,13 +35,20 @@ export default function SeriesList() {
   useEffect(() => {
     api
       .series()
-      .then(setSeries)
+      .then((list) => {
+        setSeries(list);
+        setStale(apiIsStale());
+      })
       .catch(async (e) => {
         // No backend, but the pack seeded `/api/series` into `nv-api-v1` when it
         // was downloaded. Without this the home page sat on "Đang tải…" and the
         // "Đã tải" tab — the one that has to work offline — was unreachable.
         const cached = await readPackApi<SeriesSummary[]>("/api/series");
-        if (cached) return setSeries(cached);
+        if (cached) {
+          setSeries(cached);
+          setStale(true);
+          return;
+        }
         setError(String(e.message));
       });
   }, []);
@@ -96,6 +110,7 @@ export default function SeriesList() {
     <div className="page">
       <h1 className="page-title">Hôm nay học gì?</h1>
       {tabs}
+      {stale && <OfflineNotice count={downloads.length} onShow={() => setTab("offline")} />}
       {series.length === 0 ? (
         <div className="empty">
           Chưa có series nào được publish.
@@ -120,6 +135,40 @@ export default function SeriesList() {
             </Link>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The catalogue below is from the device's own store, not from the app.
+ *
+ * Deliberately does not name the cause: "mất kết nối" reads as the user's wifi
+ * being at fault, which may be untrue and is not actionable. What matters is the
+ * consequence — this list is old, and only downloaded episodes will play — plus
+ * the one action that works.
+ */
+function OfflineNotice({ count, onShow }: { count: number; onShow: () => void }) {
+  return (
+    <div className="notice" style={{ marginBottom: 16 }}>
+      <strong>Đang xem ngoại tuyến.</strong>
+      {count > 0 ? (
+        <>
+          {" "}
+          Danh sách bên dưới là bản lưu trên máy này, có thể không còn mới. Chỉ những tập
+          đã tải về mới phát được.
+        </>
+      ) : (
+        <>
+          {" "}
+          Danh sách bên dưới là bản lưu trên máy này, có thể không còn mới. Bạn chưa tải
+          tập nào, nên chưa tập nào phát được.
+        </>
+      )}
+      {count > 0 && (
+        <button className="btn btn-sm" style={{ marginLeft: 10 }} onClick={onShow}>
+          Xem {count} tập đã tải
+        </button>
       )}
     </div>
   );

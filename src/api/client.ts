@@ -16,6 +16,18 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * True when the last API response was replayed from Cache Storage instead of
+ * fetched.
+ *
+ * `sw.js` stamps cached responses with `X-Nv-Stale`. The home page uses this to
+ * warn that only downloaded episodes are playable — without it a stale list
+ * looks exactly like a live one, and the user only discovers the problem by
+ * clicking an episode that then refuses to play.
+ */
+let stale = false;
+export const apiIsStale = () => stale;
+
 async function request<T>(path: string, init: RequestInit = {}, admin = false): Promise<T> {
   const headers = new Headers(init.headers);
   if (admin) {
@@ -26,6 +38,8 @@ async function request<T>(path: string, init: RequestInit = {}, admin = false): 
     headers.set("Content-Type", "application/json");
   }
   const res = await fetch(path, { ...init, headers });
+  // Any live response clears the flag: the server is answering again.
+  stale = res.headers.get("X-Nv-Stale") === "1";
   if (!res.ok) {
     let message = res.statusText;
     try {
