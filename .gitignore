@@ -1,0 +1,9 @@
+# .gitignore cho repo FE đứng riêng ở gốc (monorepo dùng .gitignore ở gốc repo).
+node_modules/
+dist/
+.vercel
+
+# Vercel không đọc file này khi build (build chạy trên máy họ), nhưng đừng commit
+# secret lên repo public.
+.env
+.env.local
