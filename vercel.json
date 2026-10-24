@@ -1,8 +1,8 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
-    { "source": "/api/:path*", "destination": "https://few-knives-eat.loca.lt/api/:path*" },
-    { "source": "/media/:path*", "destination": "https://few-knives-eat.loca.lt/media/:path*" },
+    { "source": "/api/:path*", "destination": "https://desktop-0josh5o.tail0583c6.ts.net/api/:path*" },
+    { "source": "/media/:path*", "destination": "https://desktop-0josh5o.tail0583c6.ts.net/media/:path*" },
     { "source": "/((?!api/|media/).*)", "destination": "/index.html" }
   ],
   "headers": [
