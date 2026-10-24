@@ -2,6 +2,9 @@
 node_modules/
 dist/
 .vercel
+# Build cache của `tsc -b`: máy nào build cũng tự sinh lại, và nội dung phụ
+# thuộc vào đường dẫn tuyệt đối nên hay gây nhiễu diff.
+*.tsbuildinfo
 
 # Vercel không đọc file này khi build (build chạy trên máy họ), nhưng đừng commit
 # secret lên repo public.
