@@ -89,11 +89,19 @@ export default function SeriesList() {
       <div className="page">
         <h1 className="page-title">Hôm nay học gì?</h1>
         {tabs}
-        <div className="empty">
-          Không tải được danh sách: {error}
-          <br />
-          Các tập đã tải vẫn xem được ở tab <strong>Đã tải</strong>.
+        <div className="notice" style={{ marginBottom: 16 }}>
+          <strong>Không tải được danh sách.</strong> {error}
         </div>
+        {downloads.length > 0 ? (
+          <button className="btn btn-primary" onClick={() => setTab("offline")}>
+            Xem {downloads.length} tập đã tải
+          </button>
+        ) : (
+          <div className="empty">
+            Chưa có tập nào trên máy này. Khi có mạng, mở một tập và bấm{" "}
+            <strong>⬇ Tải về</strong> để xem lại lúc không có mạng.
+          </div>
+        )}
       </div>
     );
   }

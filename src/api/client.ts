@@ -41,13 +41,19 @@ async function request<T>(path: string, init: RequestInit = {}, admin = false): 
   // Any live response clears the flag: the server is answering again.
   stale = res.headers.get("X-Nv-Stale") === "1";
   if (!res.ok) {
-    let message = res.statusText;
+    // Never let this be the empty string. HTTP/2 has no reason phrase, so
+    // `statusText` is "" for every response the real deployment serves — and an
+    // empty message is falsy, so callers doing `if (error)` silently fell through
+    // to their loading state and the page sat on "Đang tải…" forever. That is
+    // exactly what an anonymous visitor saw when the tunnel was down.
+    let message = res.statusText.trim();
     try {
       const data = await res.json();
-      if (typeof data.detail === "string") message = data.detail;
+      if (typeof data.detail === "string" && data.detail.trim()) message = data.detail;
     } catch {
-      /* ignore non-JSON error bodies */
+      /* non-JSON error body (Vercel's 502 answers text/plain) — keep the fallback */
     }
+    if (!message) message = `Máy chủ trả về lỗi ${res.status}.`;
     throw new ApiError(res.status, message);
   }
   if (res.status === 204) return undefined as T;
