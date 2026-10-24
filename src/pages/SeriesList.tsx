@@ -141,30 +141,20 @@ export default function SeriesList() {
 }
 
 /**
- * The catalogue below is from the device's own store, not from the app.
+ * This list came from the device's own store, not from the app.
  *
  * Deliberately does not name the cause: "mất kết nối" reads as the user's wifi
  * being at fault, which may be untrue and is not actionable. What matters is the
- * consequence — this list is old, and only downloaded episodes will play — plus
- * the one action that works.
+ * consequence — only downloaded episodes will play — plus the one action that
+ * works.
  */
 function OfflineNotice({ count, onShow }: { count: number; onShow: () => void }) {
   return (
     <div className="notice" style={{ marginBottom: 16 }}>
-      <strong>Đang xem ngoại tuyến.</strong>
-      {count > 0 ? (
-        <>
-          {" "}
-          Danh sách bên dưới là bản lưu trên máy này, có thể không còn mới. Chỉ những tập
-          đã tải về mới phát được.
-        </>
-      ) : (
-        <>
-          {" "}
-          Danh sách bên dưới là bản lưu trên máy này, có thể không còn mới. Bạn chưa tải
-          tập nào, nên chưa tập nào phát được.
-        </>
-      )}
+      <strong>Đang xem ngoại tuyến.</strong>{" "}
+      {count > 0
+        ? "Chỉ những tập đã tải về mới phát được."
+        : "Bạn chưa tải tập nào, nên chưa tập nào phát được."}
       {count > 0 && (
         <button className="btn btn-sm" style={{ marginLeft: 10 }} onClick={onShow}>
           Xem {count} tập đã tải
