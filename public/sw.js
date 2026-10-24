@@ -69,6 +69,17 @@ async function networkFirst(req, name, key) {
   const cache = await caches.open(name);
   try {
     const res = await fetch(req);
+    // A 5xx is a *successful fetch* that failed upstream, so it never reaches
+    // the catch below. Vercel answers this way (502 + a plain-text body) when
+    // the tunnel or the backend is down, and handing that to the app turned a
+    // dead backend into a JSON parse error instead of a cache hit — the UI said
+    // "Đang tải…" forever even with the episode sitting in `nv-offline-v1`.
+    // Treat it like a network failure: last good copy wins.
+    if (res.status >= 500) {
+      const hit = (await cache.match(key ?? req)) || (key ? await cache.match(req) : null);
+      if (hit) return hit;
+      return res;
+    }
     if (storable(res)) cache.put(key ?? req, res.clone());
     return res;
   } catch (err) {

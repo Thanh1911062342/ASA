@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../api/client";
-import { packThumb, removeDownload } from "../lib/download";
+import { packThumb, readPackApi, removeDownload } from "../lib/download";
 import { fmtBytes } from "../lib/utils";
 import { useDownloads } from "../stores";
 import type { DownloadEntry } from "../stores";
@@ -29,7 +29,14 @@ export default function SeriesList() {
     api
       .series()
       .then(setSeries)
-      .catch((e) => setError(String(e.message)));
+      .catch(async (e) => {
+        // No backend, but the pack seeded `/api/series` into `nv-api-v1` when it
+        // was downloaded. Without this the home page sat on "Đang tải…" and the
+        // "Đã tải" tab — the one that has to work offline — was unreachable.
+        const cached = await readPackApi<SeriesSummary[]>("/api/series");
+        if (cached) return setSeries(cached);
+        setError(String(e.message));
+      });
   }, []);
 
   const tabs = (

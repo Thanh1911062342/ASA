@@ -7,6 +7,7 @@ import SidePanel from "../../components/SidePanel";
 import {
   cancelDownload,
   isDownloading,
+  readPackApi,
   removeDownload,
   startDownload,
   storageEstimate,
@@ -237,7 +238,30 @@ export default function Watch() {
             .catch(() => undefined);
         }
       })
-      .catch((e) => alive && setError(e.message));
+      .catch(async (e) => {
+        if (!alive) return;
+        // The API is unreachable, but the episode may still be on disk. A
+        // downloaded pack carries its own copies of these three responses
+        // (see `grabExtras` in lib/download.ts), so read them directly rather
+        // than leaving the page on "Đang tải…" forever. Before this, a backend
+        // that was down *or answering 5xx* made a fully downloaded episode
+        // unopenable — which defeats the whole point of the feature.
+        const [ep, subs] = await Promise.all([
+          readPackApi<Episode>(`/api/episodes/${epId}`),
+          readPackApi<{ segments: Segment[] }>(`/api/episodes/${epId}/subtitles`),
+        ]);
+        if (!alive) return;
+        if (!ep) return setError(e.message);
+        setEpisode(ep);
+        setSegments(subs?.segments ?? []);
+        if (ep.series?.slug) {
+          const s = await readPackApi<SeriesDetail>(`/api/series/${ep.series.slug}`);
+          if (alive && s) {
+            setSeries(s);
+            setEpisodes(s.episodes ?? []);
+          }
+        }
+      });
     return () => {
       alive = false;
     };

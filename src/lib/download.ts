@@ -274,6 +274,27 @@ export async function hasPack(episodeId: number): Promise<boolean> {
   }
 }
 
+/**
+ * Read one of the JSON responses the pack stored when it was downloaded.
+ *
+ * The Service Worker normally answers `/api/*` from `nv-api-v1`, but the Watch
+ * page must not *depend* on that: a backend that is up but erroring (Vercel's
+ * 502 when the tunnel is down) is a live response, not a network failure, and
+ * the SW cannot always tell the difference. With a pack on disk the episode is
+ * meant to open regardless, so the page asks for the bytes itself.
+ */
+export async function readPackApi<T>(path: string): Promise<T | null> {
+  if (!offlineSupported()) return null;
+  try {
+    const cache = await caches.open(API_CACHE);
+    const hit = await cache.match(path);
+    if (!hit) return null;
+    return (await hit.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
 export async function storageEstimate(): Promise<{ usage: number; quota: number }> {
   try {
     const est = await navigator.storage?.estimate?.();
