@@ -52,7 +52,7 @@ export interface DownloadEntry {
   title: string | null;
   thumbnail: string | null;
   duration: number | null;
-  sourceType: "file" | "hls";
+  sourceType: "file" | "hls" | "embed";
   /** HLS: segments finished. file: 0 or 1 — a file pack is one request. */
   loaded: number;
   /** HLS: segments in the playlist. file: 1. */

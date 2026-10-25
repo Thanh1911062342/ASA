@@ -14,6 +14,9 @@ import {
   PRELOAD_WORKERS,
 } from "../lib/preload";
 import { isMobile } from "../lib/utils";
+import { createEmbed, youtubeId } from "../lib/youtube";
+import type { EmbedHandle } from "../lib/youtube";
+import { hasYtPack } from "../lib/ytdownload";
 import { useDownloads } from "../stores";
 import type { Episode } from "../types";
 
@@ -62,6 +65,16 @@ interface PlayerProps {
   freeRun: boolean;
   /** Report the media duration once known. */
   onDuration?: (seconds: number) => void;
+  /** Playback speed. Applied to the iframe player via its own API. */
+  rate?: number;
+  /**
+   * Filled in by the player with a seek function for `embed` episodes, where
+   * there is no `<video>` for the parent to set `currentTime` on. Null for
+   * every other source type — the parent keeps using `videoRef` there.
+   */
+  embedSeekRef?: React.RefObject<((ms: number) => void) | null>;
+  /** Same idea for play/pause, which the app's own controls drive. */
+  embedControlRef?: React.RefObject<{ play: () => void; pause: () => void } | null>;
 }
 
 const PROXY_PREFIX = "/media/proxy?url=";
@@ -102,11 +115,54 @@ export default function Player({
   onEnded,
   freeRun,
   onDuration,
+  rate = 1,
+  embedSeekRef,
+  embedControlRef,
 }: PlayerProps) {
   const timeMsRef = useRef(0);
 
+  // ---- `embed` episodes: a third-party iframe instead of our own <video>.
+  // YouTube serves every format as separate video and audio tracks, so there is
+  // no single URL <video> could play — the iframe is the only way to show it,
+  // and the IFrame Player API is the only way to seek it (see lib/youtube.ts).
+  const embedId = episode.source_type === "embed" ? youtubeId(episode.embed_src ?? episode.embed_url ?? "") : null;
+  /**
+   * `true` once an `embed` episode has a muxed copy on disk. The downloaded MP4
+   * is strictly better than the iframe — it plays offline, at any speed, with
+   * no YouTube error card — so when it exists the iframe is not used at all.
+   */
+  const [embedPackReady, setEmbedPackReady] = useState(false);
+  useEffect(() => {
+    if (episode.source_type !== "embed") return;
+    let alive = true;
+    void hasYtPack(episode.id).then((ok) => {
+      if (alive) setEmbedPackReady(ok);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [episode.id, episode.source_type]);
+  const isEmbed = embedId !== null && !embedPackReady;
+  const embedHostRef = useRef<HTMLDivElement | null>(null);
+  const embedRef = useRef<EmbedHandle | null>(null);
+  const [embedError, setEmbedError] = useState<string | null>(null);
+  /** Set once the iframe player is booted, so the spinner can go away. */
+  const [embedReady, setEmbedReady] = useState(false);
+  const onPlayStateRef = useRef(onPlayStateChange);
+  onPlayStateRef.current = onPlayStateChange;
+  const onEndedRef = useRef(onEnded);
+  onEndedRef.current = onEnded;
+  const onDurationRef0 = useRef(onDuration);
+  onDurationRef0.current = onDuration;
+
   const netUrl =
-    episode.source_type === "hls" ? (episode.proxy_url ?? episode.hls_url) : episode.stream_url;
+    episode.source_type === "hls"
+      ? (episode.proxy_url ?? episode.hls_url)
+      : episode.source_type === "embed"
+        ? // Once muxed, the pack is played as a file; before that there is no
+          // URL to hand <video> at all.
+          (embedPackReady ? packVideo(episode.id) : null)
+        : episode.stream_url;
 
   // ---- play from the downloaded pack, when there is one on disk
   const entry = useDownloads((s) => s.entries[episode.id]);
@@ -230,8 +286,94 @@ export default function Player({
     // eslint-disable-next-line react-hooks/exhaustive-deps - openGate closes over directUrl
   }, [episode.source_type, directUrl, videoRef, skipPreload, packDone, packSettled]);
 
+  // ---- attach the iframe player for `embed` episodes
+  useEffect(() => {
+    if (!isEmbed || !embedId) return;
+    const host = embedHostRef.current;
+    if (!host) return;
+
+    setEmbedReady(false);
+    setEmbedError(null);
+    let alive = true;
+    const { ready, destroy } = createEmbed(host, embedId, {
+      onReady: (duration) => {
+        if (!alive) return;
+        setEmbedReady(true);
+        onDurationRef0.current?.(duration);
+      },
+      onStateChange: (state) => {
+        if (!alive) return;
+        onPlayStateRef.current(state === "playing");
+        if (state === "ended") onEndedRef.current();
+      },
+      onError: (message) => {
+        if (!alive) return;
+        // Surfaced rather than swallowed: an uploader who disabled embedding
+        // produces a blank box otherwise, and the only fix is to not embed.
+        setEmbedError(message);
+        setEmbedReady(true);
+      },
+    });
+    ready.then(
+      (handle) => {
+        if (!alive) {
+          handle.destroy();
+          return;
+        }
+        embedRef.current = handle;
+      },
+      (err: unknown) => {
+        // Offline, or the script is blocked: `loadYouTubeApi` rejects. Without
+        // this second argument the rejection is unhandled — an uncaught page
+        // error — and the player sits on its spinner forever.
+        if (!alive) return;
+        setEmbedError(err instanceof Error ? err.message : "Không tải được trình phát YouTube.");
+        setEmbedReady(true);
+      },
+    );
+
+    return () => {
+      alive = false;
+      embedRef.current = null;
+      destroy();
+    };
+  }, [isEmbed, embedId]);
+
+  // ---- drive the iframe player's clock. It has no `timeupdate` event, so the
+  //      same requestAnimationFrame loop that interpolates <video> is used, and
+  //      reading getCurrentTime() through the API is what makes a subtitle
+  //      click land on the right line.
+  useEffect(() => {
+    if (!isEmbed) return;
+    let raf = 0;
+    const tick = () => {
+      const handle = embedRef.current;
+      const t = (handle?.currentTime() ?? 0) * 1000;
+      if (handle && !handle.isPaused()) {
+        timeMsRef.current = t;
+      } else if (freeRun) {
+        // Reading mode: the iframe stays paused while the subtitle clock keeps
+        // advancing, matching the <video> path.
+        timeMsRef.current += 16;
+      } else {
+        timeMsRef.current = t;
+      }
+      onTimeMs(timeMsRef.current);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [isEmbed, onTimeMs, freeRun]);
+
+  // ---- playback rate follows the app's speed control
+  useEffect(() => {
+    if (!isEmbed) return;
+    embedRef.current?.setRate(rate);
+  }, [isEmbed, rate]);
+
   // ---- attach hls.js when needed
   useEffect(() => {
+    if (isEmbed) return;
     if (!directUrl || !ready) return;
     const video = videoRef.current;
     if (!video) return;
@@ -355,20 +497,65 @@ export default function Player({
     };
   }, [onTimeMs, videoRef, freeRun]);
 
+  // Expose seek/pause to the parent. Watch.tsx already seeks by writing to
+  // `videoRef.currentTime` when a subtitle line is clicked; there is no <video>
+  // for an embed, so the same intent goes through the iframe API instead. The
+  // parent owns the ref so it stays a single call site in Watch.tsx.
+  useEffect(() => {
+    if (!isEmbed) return;
+    const seek = (ms: number) => embedRef.current?.seekTo(ms / 1000);
+    if (embedSeekRef) embedSeekRef.current = seek;
+    if (embedControlRef) {
+      embedControlRef.current = {
+        play: () => embedRef.current?.play(),
+        pause: () => embedRef.current?.pause(),
+      };
+    }
+    return () => {
+      if (embedSeekRef) embedSeekRef.current = null;
+      if (embedControlRef) embedControlRef.current = null;
+    };
+  }, [isEmbed, embedReady, embedSeekRef, embedControlRef]);
+
   return (
     <div className="player-frame">
-      <video
-        ref={videoRef}
-        preload="metadata"
-        playsInline
-        // Native controls stay hidden: the app's own controls drive playback
-        // (pause/seek/speed), which is the whole point of streaming it here.
-        controls={false}
-        onPlay={() => onPlayStateChange(true)}
-        onPause={() => onPlayStateChange(false)}
-        onEnded={onEnded}
-      />
-      {!ready && (
+      {isEmbed ? (
+        // The API replaces the child element with its own iframe, so this div is
+        // a mount point rather than a styled surface.
+        <div
+          ref={embedHostRef}
+          data-testid="yt-embed"
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
+        />
+      ) : (
+        <video
+          ref={videoRef}
+          preload="metadata"
+          playsInline
+          // Native controls stay hidden: the app's own controls drive playback
+          // (pause/seek/speed), which is the whole point of streaming it here.
+          controls={false}
+          onPlay={() => onPlayStateChange(true)}
+          onPause={() => onPlayStateChange(false)}
+          onEnded={onEnded}
+        />
+      )}
+      {isEmbed && embedError && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "grid",
+            placeItems: "center",
+            padding: 24,
+            textAlign: "center",
+            background: "var(--bg-elev)",
+          }}
+        >
+          <div className="notice">⚠ {embedError}</div>
+        </div>
+      )}
+      {!ready && !isEmbed && (
         <div
           // Absolutely positioned inside `.player-frame`, which is already
           // `position: relative`; `.spinner` is reused CSS, so nothing new to

@@ -13,6 +13,7 @@ import {
   storageEstimate,
 } from "../../lib/download";
 import { fmtBytes, fmtTime, findSegment, isMobile } from "../../lib/utils";
+import { startYtDownload } from "../../lib/ytdownload";
 import { useDownloads, useSettings } from "../../stores";
 import type { DownloadEntry } from "../../stores";
 import type { Episode, Segment, SeriesDetail } from "../../types";
@@ -91,6 +92,7 @@ function DownloadButton({ episode }: { episode: Episode }) {
   const entry = useDownloads((s) => s.entries[episode.id]);
   const [confirming, setConfirming] = useState(false);
   const [free, setFree] = useState(0);
+  const ytAbort = useRef<AbortController | null>(null);
 
   // Shown before the first click only: the user decides what to give back to
   // the browser, so the remaining room is worth knowing up front.
@@ -104,11 +106,39 @@ function DownloadButton({ episode }: { episode: Episode }) {
     };
   }, [entry?.status]);
 
-  // Leaving the confirm state when the pack changes underneath us avoids a
-  // "🗑 Xóa?" button that no longer refers to anything.
-  useEffect(() => setConfirming(false), [entry?.status]);
-
   const status = entry?.status;
+
+  // An `embed` episode has no single URL the app can fetch: YouTube splits every
+  // format into video-only and audio-only tracks and blocks cross-origin reads.
+  // The offline path is therefore a different pipeline — fetch both tracks
+  // through the proxy, then mux them here in the browser (`lib/ytdownload.ts`).
+  if (episode.source_type === "embed" && status !== "done") {
+    if (status === "downloading") {
+      const label = entry.error ?? "Đang tải…";
+      return (
+        <button
+          className="btn btn-sm"
+          onClick={() => ytAbort.current?.abort()}
+          title="Bấm để dừng"
+        >
+          {entry.total === 100 ? `⬇ Ghép ${entry.loaded}%` : `⬇ ${label}`}
+        </button>
+      );
+    }
+    return (
+      <button
+        className="btn btn-sm"
+        title="Tải video này về máy: tải hình và tiếng rồi ghép ngay trên máy bạn"
+        onClick={() => {
+          const controller = new AbortController();
+          ytAbort.current = controller;
+          void startYtDownload(episode, controller.signal);
+        }}
+      >
+        {status === "partial" ? "↻ Tải tiếp" : "⬇ Tải về máy"}
+      </button>
+    );
+  }
 
   if (status === "done") {
     return (
@@ -207,10 +237,17 @@ export default function Watch() {
   const downloaded = useDownloads((s) => s.entries[epId]);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const subStripRef = useRef<HTMLDivElement | null>(null);
+  // For `embed` episodes there is no <video> to write `currentTime` to, so the
+  // player hands these two back instead. Every seek/play call site below stays
+  // identical — only the target changes.
+  const embedSeekRef = useRef<((ms: number) => void) | null>(null);
+  const embedControlRef = useRef<{ play: () => void; pause: () => void } | null>(null);
 
   // Every source plays in our own <video> now (no iframe), so the controls are
   // always live. `playable` only gates the "no source yet" notice.
-  const playable = episode ? !!(episode.proxy_url || episode.hls_url || episode.stream_url) : false;
+  const playable = episode
+    ? !!(episode.proxy_url || episode.hls_url || episode.stream_url || episode.embed_src)
+    : false;
 
   // Load episode + subtitles (+ series with its episode list)
   useEffect(() => {
@@ -293,37 +330,66 @@ export default function Watch() {
     return () => ro.disconnect();
   }, [activeIdx, subMode, mobile, segments]);
 
+  // ---- playback control. Each helper prefers the iframe handle when the episode
+  // is an `embed`; `videoRef` is null there, so without the branch every button
+  // on the page would silently do nothing.
   const togglePlay = useCallback(() => {
+    const embedCtrl = embedControlRef.current;
     const v = videoRef.current;
-    if (!v) return;
-    if (v.paused) v.play().catch(() => undefined);
-    else v.pause();
-  }, []);
+    if (v) {
+      if (v.paused) v.play().catch(() => undefined);
+      else v.pause();
+      return;
+    }
+    if (!embedCtrl) return;
+    if (playing) embedCtrl.pause();
+    else embedCtrl.play();
+  }, [playing]);
 
-  const seekRelative = useCallback((deltaSec: number) => {
-    const v = videoRef.current;
-    if (!v) return;
-    v.currentTime = Math.max(0, v.currentTime + deltaSec);
-  }, []);
+  const seekRelative = useCallback(
+    (deltaSec: number) => {
+      const v = videoRef.current;
+      if (v) {
+        v.currentTime = Math.max(0, v.currentTime + deltaSec);
+        return;
+      }
+      const embedSeek = embedSeekRef.current;
+      if (embedSeek) embedSeek(Math.max(0, timeMs + deltaSec * 1000));
+    },
+    [timeMs],
+  );
 
   const seekTo = useCallback((ms: number) => {
     const v = videoRef.current;
-    if (v) v.currentTime = ms / 1000;
-    else setTimeMs(ms);
+    if (v) {
+      v.currentTime = ms / 1000;
+      // Optimistic: the strip should move on click, and the iframe only reports
+      // its position on our next poll.
+      setTimeMs(ms);
+      return;
+    }
+    embedSeekRef.current?.(ms);
+    setTimeMs(ms);
   }, []);
 
   /** Click a line in the side panel: jump there and resume (re-listen). */
   const replayFrom = useCallback((ms: number) => {
     const v = videoRef.current;
-    if (!v) return;
-    v.currentTime = ms / 1000;
-    v.play().catch(() => undefined);
+    if (v) {
+      v.currentTime = ms / 1000;
+      v.play().catch(() => undefined);
+      return;
+    }
+    embedSeekRef.current?.(ms);
+    embedControlRef.current?.play();
+    setTimeMs(ms);
   }, []);
 
   /** Pause the video when entering reading mode; leaving it resumes manually. */
   const toggleFreeRun = useCallback(() => {
     const v = videoRef.current;
     if (!freeRun && v && !v.paused) v.pause();
+    if (!freeRun && !v) embedControlRef.current?.pause();
     setFreeRun((r) => !r);
   }, [freeRun]);
 
@@ -364,6 +430,9 @@ export default function Watch() {
       onEnded={() => undefined}
       freeRun={freeRun}
       onDuration={setDuration}
+      rate={rate}
+      embedSeekRef={embedSeekRef}
+      embedControlRef={embedControlRef}
     />
   );
 

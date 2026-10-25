@@ -17,8 +17,11 @@ export interface Episode {
   series_id: number;
   number: number;
   title: string | null;
-  source_type: "file" | "hls";
+  /** `embed` = third-party iframe (YouTube) driven via the IFrame Player API. */
+  source_type: "file" | "hls" | "embed";
   embed_url: string | null;
+  /** Set only for `source_type: "embed"` — what the iframe should load. */
+  embed_src?: string | null;
   hls_url: string | null;
   stream_url: string | null;
   proxy_url: string | null;

@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@ffmpeg/ffmpeg": "^0.12.15",
     "@tanstack/react-virtual": "^3.10.8",
     "hls.js": "^1.7.3",
     "react": "^19.0.0",
