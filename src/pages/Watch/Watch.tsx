@@ -231,7 +231,7 @@ export default function Watch() {
   const [mobile, setMobile] = useState(isMobile());
   const [duration, setDuration] = useState<number | null>(null);
 
-  const { subMode, setSubMode, rate, setRate } = useSettings();
+  const { subMode, setSubMode, rate, setRate, volume } = useSettings();
   // Above the early returns below: a hook after a conditional `return` changes
   // the hook count between renders and React aborts the whole tree.
   const downloaded = useDownloads((s) => s.entries[epId]);
@@ -431,6 +431,7 @@ export default function Watch() {
       freeRun={freeRun}
       onDuration={setDuration}
       rate={rate}
+      volume={volume}
       embedSeekRef={embedSeekRef}
       embedControlRef={embedControlRef}
     />

@@ -135,6 +135,8 @@ export interface EmbedCallbacks {
   /** Fires on play/pause/seek/end so the parent can mirror its own UI state. */
   onStateChange?: (state: "playing" | "paused" | "ended" | "buffering") => void;
   onError?: (message: string) => void;
+  /** Volume 0..1 to apply as soon as the player exists. */
+  volume?: number;
 }
 
 /** Player error codes → something a learner can act on. */
@@ -194,6 +196,11 @@ export function createEmbed(
                 return;
               }
               player = created;
+              // Unmute and apply the app's volume immediately. The iframe
+              // starts muted in several browsers (an autoplay policy), and
+              // nothing else here would ever turn it back on — that is exactly
+              // how an embedded episode ended up playing with no sound.
+              applyVolume(created, cb.volume ?? 1);
               cb.onReady?.(created.getDuration());
               resolve(makeHandle(created));
             },
@@ -236,6 +243,23 @@ export function createEmbed(
   return { ready, destroy };
 }
 
+/**
+ * Set volume on an iframe player, unmuting explicitly.
+ *
+ * The API has `mute()`/`unMute()` separate from `setVolume()`, and
+ * `setVolume(100)` does **not** unmute a player that autoplay left muted. So
+ * every non-zero volume has to unmute too.
+ */
+function applyVolume(p: YTPlayer, volume: number): void {
+  const clamped = Math.min(1, Math.max(0, volume));
+  if (clamped <= 0) {
+    p.mute();
+    return;
+  }
+  p.unMute();
+  p.setVolume(Math.round(clamped * 100));
+}
+
 function noopHandle(): EmbedHandle {
   return {
     play: () => undefined,
@@ -258,13 +282,7 @@ function makeHandle(p: YTPlayer): EmbedHandle {
     // within what it has already buffered, which reads as "seek did nothing".
     seekTo: (seconds) => p.seekTo(Math.max(0, seconds), true),
     setRate: (rate) => p.setPlaybackRate(rate),
-    setVolume: (volume) => {
-      if (volume <= 0) p.mute();
-      else {
-        p.unMute();
-        p.setVolume(Math.round(volume * 100));
-      }
-    },
+    setVolume: (volume) => applyVolume(p, volume),
     currentTime: () => p.getCurrentTime() ?? 0,
     duration: () => p.getDuration() ?? 0,
     isPaused: () => p.getPlayerState() !== 1,

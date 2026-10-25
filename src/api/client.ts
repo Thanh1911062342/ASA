@@ -98,7 +98,20 @@ export const adminApi = {
     return request<Episode>(`/api/admin/episodes/${id}/video`, { method: "POST", body: form }, true);
   },
   extractHls: (pageUrl: string, referer?: string) =>
-    request<{ urls: string[] }>("/api/admin/extract-hls", json({ page_url: pageUrl, referer }), true),
+    request<{
+      urls: string[];
+      via: string | null;
+      kind: string;
+      title: string | null;
+      duration: number | null;
+      thumbnail: string | null;
+      embeddable: boolean;
+      /** True when video and audio are separate tracks (YouTube) — an `hls`
+       * episode built from such a playlist plays picture with no sound. */
+      audio_separate: boolean;
+      notes: string[];
+      error: string | null;
+    }>("/api/admin/extract-hls", json({ page_url: pageUrl, referer }), true),
 
   ingestEpisode: (id: number) =>
     request<AiJob>(`/api/admin/episodes/${id}/ingest`, { method: "POST" }, true),

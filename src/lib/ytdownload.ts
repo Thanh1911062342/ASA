@@ -208,15 +208,27 @@ async function fetchHls(
   if (!res.ok) throw new Error(`Không đọc được playlist (${res.status}).`);
   const body = await res.text();
 
-  // A master playlist points at variants; recurse into the last (lowest) one.
+  // A master playlist points at variants; recurse into the **highest**-bandwidth
+  // one (an earlier version took the last line, which is typically the lowest —
+  // that is how a download ended up at 144p).
   if (body.includes("#EXT-X-STREAM-INF")) {
-    const variant = body
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => l && !l.startsWith("#"))
-      .pop();
-    if (!variant) throw new Error("Playlist không có biến thể nào.");
-    return fetchHls(new URL(variant, res.url).href, signal, onBytes);
+    const lines = body.split("\n").map((l) => l.trim());
+    let bestUri: string | null = null;
+    let bestBw = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (!lines[i].startsWith("#EXT-X-STREAM-INF")) continue;
+      const bw = Number(/BANDWIDTH=(\d+)/.exec(lines[i])?.[1] ?? 0);
+      // The URI is the next non-empty, non-comment line.
+      const uri = lines
+        .slice(i + 1)
+        .find((l) => l && !l.startsWith("#"));
+      if (uri && bw >= bestBw) {
+        bestBw = bw;
+        bestUri = uri;
+      }
+    }
+    if (!bestUri) throw new Error("Playlist không có biến thể nào.");
+    return fetchHls(new URL(bestUri, res.url).href, signal, onBytes);
   }
 
   // URIs are root-relative paths already pointing at our own proxy, so the page

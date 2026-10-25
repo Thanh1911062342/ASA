@@ -67,6 +67,9 @@ interface PlayerProps {
   onDuration?: (seconds: number) => void;
   /** Playback speed. Applied to the iframe player via its own API. */
   rate?: number;
+  /** Volume 0..1, applied to the iframe player (the <video> path is unmuted by
+   * the browser; the iframe needs an explicit unMute — see lib/youtube.ts). */
+  volume?: number;
   /**
    * Filled in by the player with a seek function for `embed` episodes, where
    * there is no `<video>` for the parent to set `currentTime` on. Null for
@@ -116,6 +119,7 @@ export default function Player({
   freeRun,
   onDuration,
   rate = 1,
+  volume = 1,
   embedSeekRef,
   embedControlRef,
 }: PlayerProps) {
@@ -154,6 +158,10 @@ export default function Player({
   onEndedRef.current = onEnded;
   const onDurationRef0 = useRef(onDuration);
   onDurationRef0.current = onDuration;
+  // Read through a ref so a volume change does not tear down and recreate the
+  // iframe player — the boot-time value is applied by the effect below.
+  const volumeRef = useRef(volume);
+  volumeRef.current = volume;
 
   const netUrl =
     episode.source_type === "hls"
@@ -313,6 +321,7 @@ export default function Player({
         setEmbedError(message);
         setEmbedReady(true);
       },
+      volume: volumeRef.current,
     });
     ready.then(
       (handle) => {
@@ -370,6 +379,14 @@ export default function Player({
     if (!isEmbed) return;
     embedRef.current?.setRate(rate);
   }, [isEmbed, rate]);
+
+  // ---- volume follows the app's volume control. setVolume alone is not
+  //      enough: the iframe can be left muted by the autoplay policy, and the
+  //      handle's setVolume unmutes explicitly (see applyVolume in youtube.ts).
+  useEffect(() => {
+    if (!isEmbed) return;
+    embedRef.current?.setVolume(volume);
+  }, [isEmbed, volume, embedReady]);
 
   // ---- attach hls.js when needed
   useEffect(() => {

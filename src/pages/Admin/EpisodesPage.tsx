@@ -133,10 +133,25 @@ export default function EpisodesPage() {
     try {
       const res = await adminApi.extractHls(form.embed_url, form.embed_url);
       if (res.urls.length === 0) {
-        setError("Không tìm thấy playlist nào trong trang embed. Dán tay URL .m3u8 vào ô dưới.");
-      } else {
-        setForm({ ...form, hls_url: res.urls[0] });
+        setError(
+          res.error ??
+            "Không tìm thấy playlist nào trong trang embed. Dán tay URL .m3u8 vào ô dưới.",
+        );
+        return;
       }
+      // A YouTube HLS playlist is video-only — playing it as `hls` gives
+      // picture with no sound, which is exactly the bug this check exists to
+      // prevent. If the video is embeddable, switch the form to `embed`
+      // (the iframe plays both tracks, is seekable, and can still be
+      // downloaded offline via client-side muxing).
+      if (res.audio_separate && res.embeddable) {
+        setNotice(
+          "Video này tách riêng hình/tiếng (YouTube) — đã chuyển nguồn sang “Nhúng YouTube” để có tiếng. Vẫn tải offline được.",
+        );
+        setForm({ ...form, source_type: "embed", hls_url: "" });
+        return;
+      }
+      setForm({ ...form, hls_url: res.urls[0] });
     } catch (err) {
       setError(`Lấy HLS: ${(err as Error).message}`);
     } finally {
@@ -215,6 +230,8 @@ export default function EpisodesPage() {
               <td className="faint" style={{ fontSize: 13 }}>
                 {ep.source_type === "hls" ? (
                   <span title={ep.hls_url ?? ""}>stream{ep.embed_url ? " (từ embed)" : ""}</span>
+                ) : ep.source_type === "embed" ? (
+                  <span title={ep.embed_url ?? ""}>nhúng YouTube</span>
                 ) : (
                   <span title={ep.stream_url ?? ""}>
                     file{ep.duration ? ` · ${fmtTime(ep.duration)}` : ""}
@@ -323,6 +340,7 @@ export default function EpisodesPage() {
                 onChange={(e) => setForm({ ...form, source_type: e.target.value })}
               >
                 <option value="hls">Stream — dán link embed, tự lấy HLS</option>
+                <option value="embed">Nhúng YouTube — iframe, tua được, tải offline được</option>
                 <option value="file">File — tự host MP4</option>
               </select>
             </div>
@@ -366,6 +384,22 @@ export default function EpisodesPage() {
                   </span>
                 </div>
               </>
+            )}
+            {form.source_type === "embed" && (
+              <div className="field">
+                <label>Link video YouTube</label>
+                <input
+                  className="input"
+                  placeholder="https://www.youtube.com/watch?v=…"
+                  value={form.embed_url}
+                  onChange={(e) => setForm({ ...form, embed_url: e.target.value })}
+                />
+                <span className="faint" style={{ fontSize: 12 }}>
+                  Phát bằng iframe chính chủ của YouTube (có tiếng, tua được khi click câu thoại).
+                  Người xem vẫn có thể bấm “Tải về máy” — app tự ghép hình + tiếng ngay trên máy họ.
+                  Video phải cho phép nhúng; nếu không, dùng nguồn Stream.
+                </span>
+              </div>
             )}
             {form.source_type === "file" && (
               <div className="field">
